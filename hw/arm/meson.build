@@ -29,6 +29,7 @@ arm_common_ss.add(when: 'CONFIG_MAX78000_SOC', if_true: files('max78000_soc.c'))
 arm_common_ss.add(when: 'CONFIG_RASPI', if_true: files(
   'bcm2836.c',
   'bcm2838.c',
+  'bcm2838_pcie.c',
   'raspi.c',
   'raspi4b.c'
 ))
