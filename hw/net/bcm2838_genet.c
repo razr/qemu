@@ -22,6 +22,7 @@
 #include "trace.h"
 
 static void bcm2838_genet_phy_update_link(BCM2838GenetState *s);
+static void bcm2838_genet_phy_reset(BCM2838GenetState *s);
 
 /* GENET layouts */
 REG32(GENET_SYS_REV_CTRL,              0)
@@ -415,6 +416,11 @@ static uint64_t bcm2838_genet_mdio_cmd(BCM2838GenetState *s, uint64_t cmd)
                 bcm2838_genet_phy_exp_shadow_write(s, phy_reg_data);
             } else {
                 if (phy_reg_id == BCM2838_GENET_PHY_BMCR) {
+                    /* Soft reset self-clears and restores PHY defaults */
+                    if (FIELD_EX16(phy_reg_data, GENET_PHY_BMCR, RESET) == 1) {
+                        bcm2838_genet_phy_reset(s);
+                        return cmd;
+                    }
                     /* Initiate auto-negotiation once it has been restarted */
                     if (anrestart == 1) {
                         phy_reg_data = FIELD_DP16(phy_reg_data,
