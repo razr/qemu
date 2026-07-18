@@ -102,6 +102,11 @@ FIELD(GENET_UMAC_MAC_1, RSVD_16_31, 16, 8)
 /* MDIO address of the only PHY on the bus (BCM54213PE) */
 #define BCM2838_GENET_PHY_ADDR 1
 
+/* RBUF_CTRL/TBUF_CTRL bit 0: pass a 64B status block with each frame */
+#define BCM2838_GENET_BUF_CTRL_64B_EN 1
+/* RBUF_CTRL bit 1: prepend 2 pad bytes so the IP header lands aligned */
+#define BCM2838_GENET_RBUF_ALIGN_2B   2
+
 REG32(GENET_UMAC_MDIO_CMD,             0)
 FIELD(GENET_UMAC_MDIO_CMD, REG_DATA,   0, 16)
 FIELD(GENET_UMAC_MDIO_CMD, REG_ID,     16, 5)
@@ -434,21 +439,24 @@ static uint64_t bcm2838_genet_make_u64(uint32_t hi, uint32_t lo)
     return ((uint64_t)hi << 32) | lo;
 }
 
-static void bcm2838_genet_xmit_packet(NetClientState *s, void *packet,
+static void bcm2838_genet_xmit_packet(BCM2838GenetState *s, void *packet,
                                       size_t size)
 {
-    uint8_t *buf = packet + sizeof(BCM2838GenetXmitStatus);
+    /* A TX status block precedes the frame only if the guest enabled it */
+    size_t tsb_len = (s->regs.tbuf.ctrl & BCM2838_GENET_BUF_CTRL_64B_EN)
+        ? sizeof(BCM2838GenetXmitStatus) : 0;
+    uint8_t *buf = (uint8_t *)packet + tsb_len;
     size_t len;
     uint16_t len_type;
 
     /* We need the status block and a whole Ethernet header (len/type at 12) */
-    if (size < sizeof(BCM2838GenetXmitStatus) + ETH_HLEN) {
+    if (size < tsb_len + ETH_HLEN) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "%s: TX frame too short (%zu bytes)\n", __func__, size);
         return;
     }
 
-    len = size - sizeof(BCM2838GenetXmitStatus);
+    len = size - tsb_len;
     net_checksum_calculate(buf, len, CSUM_ALL);
 
     len_type = lduw_be_p(buf + 12);
@@ -456,7 +464,7 @@ static void bcm2838_genet_xmit_packet(NetClientState *s, void *packet,
         stw_be_p(buf + 12, len);
     }
 
-    qemu_send_packet(s, buf, len);
+    qemu_send_packet(qemu_get_queue(s->nic), buf, len);
 }
 
 static uint64_t bcm2838_genet_tx(BCM2838GenetState *s, unsigned int ring_index,
@@ -528,7 +536,7 @@ static uint64_t bcm2838_genet_tx(BCM2838GenetState *s, unsigned int ring_index,
         packet_off += buflength;
 
         if (FIELD_EX32(desc_status, GENET_RDMA_LENGTH_STATUS, EOP) != 0) {
-            bcm2838_genet_xmit_packet(qemu_get_queue(s->nic), s->tx_packet,
+            bcm2838_genet_xmit_packet(s, s->tx_packet,
                                       packet_off);
             packet_off = 0;
         }
@@ -937,7 +945,10 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
         hwaddr dma_buf_addr =
             bcm2838_genet_make_u64(desc->address_hi, desc->address_lo);
         MemTxResult mem_tx_result = MEMTX_OK;
-        const size_t frame_off = sizeof(BCM2838GenetXmitStatus) + 2;
+        /* Status block and 2B alignment pad only if the guest enabled them */
+        const bool rsb = s->regs.rbuf.ctrl & BCM2838_GENET_BUF_CTRL_64B_EN;
+        const size_t frame_off = (rsb ? sizeof(BCM2838GenetXmitStatus) : 0)
+            + ((s->regs.rbuf.ctrl & BCM2838_GENET_RBUF_ALIGN_2B) ? 2 : 0);
         uint8_t *frame_buf = dma_buf + frame_off;
 
         bool crc_fwd = FIELD_EX32(s->regs.umac.cmd, GENET_UMAC_CMD, CRC_FWD);
@@ -988,9 +999,11 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
          * We don't implement the hardware's partial RX checksum: report 0 and
          * rely on the guest verifying checksums in software.
          */
-        stl_le_p(dma_buf + offsetof(BCM2838GenetXmitStatus, rx_csum), 0);
-        stl_le_p(dma_buf + offsetof(BCM2838GenetXmitStatus, length_status),
-                 desc->length_status);
+        if (rsb) {
+            stl_le_p(dma_buf + offsetof(BCM2838GenetXmitStatus, rx_csum), 0);
+            stl_le_p(dma_buf + offsetof(BCM2838GenetXmitStatus, length_status),
+                     desc->length_status);
+        }
 
         mem_tx_result = address_space_write(&s->dma_as, dma_buf_addr,
                                             MEMTXATTRS_UNSPECIFIED,
