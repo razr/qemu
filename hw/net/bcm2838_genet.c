@@ -624,6 +624,23 @@ static bool bcm2838_genet_rdma_ring_active(BCM2838GenetState *s,
     return active;
 }
 
+/*
+ * Transmit descriptors a guest queued while a ring was still disabled
+ * (producer index written before the ring/DMA enable bits were set).
+ */
+static void bcm2838_genet_tdma_kick(BCM2838GenetState *s)
+{
+    unsigned int ring_index;
+
+    for (ring_index = 0; ring_index < ARRAY_SIZE(s->regs.tdma.rings);
+         ring_index++) {
+        if (bcm2838_genet_tdma_ring_active(s, ring_index)) {
+            bcm2838_genet_tdma_prod_index_write(
+                s, ring_index, s->regs.tdma.rings[ring_index].prod_index);
+        }
+    }
+}
+
 static void bcm2838_genet_tdma(BCM2838GenetState *s, hwaddr offset,
                                uint64_t value)
 {
@@ -788,6 +805,11 @@ static void bcm2838_genet_write(void *opaque, hwaddr offset, uint64_t value,
     }
 
     *bcm2838_genet_reg(s, offset) = value;
+    if (offset == BCM2838_GENET_TDMA_RING_CFG ||
+        offset == BCM2838_GENET_TDMA_CTRL) {
+        /* Rings may have just become active; send anything pending */
+        bcm2838_genet_tdma_kick(s);
+    }
     if (offset == BCM2838_GENET_RDMA_CTRL &&
         FIELD_EX32(value, GENET_DMA_CTRL, EN)) {
         qemu_flush_queued_packets(ncs);
