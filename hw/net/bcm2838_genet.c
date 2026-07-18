@@ -533,21 +533,68 @@ static bool bcm2838_genet_rdma_ring_active(BCM2838GenetState *s,
     return active;
 }
 
+static void bcm2838_genet_tdma_process_ring(BCM2838GenetState *s,
+                                            unsigned int ring_index,
+                                            uint32_t prod_index)
+{
+    uint64_t num_descs_tx;
+    uint32_t tx_intrs;
+    uint32_t cons_index = s->regs.tdma.rings[ring_index].cons_index;
+    uint32_t cons_index_fld = FIELD_EX32(cons_index,
+                                         GENET_DMA_CONS_INDEX, INDEX);
+    uint32_t prod_index_fld = FIELD_EX32(prod_index,
+                                         GENET_DMA_PROD_INDEX, INDEX);
+
+    if (cons_index_fld == prod_index_fld) {
+        return;
+    }
+
+    trace_bcm2838_genet_tx_request(ring_index, prod_index_fld, cons_index_fld);
+    num_descs_tx = bcm2838_genet_tx(s, ring_index, prod_index, cons_index);
+    if (num_descs_tx > 0) {
+        s->regs.tdma.rings[ring_index].cons_index =
+            FIELD_DP32(s->regs.tdma.rings[ring_index].cons_index,
+                       GENET_DMA_CONS_INDEX, INDEX,
+                       cons_index + num_descs_tx);
+
+        if (ring_index == BCM2838_GENET_DMA_RING_DEFAULT) {
+            s->regs.intrl0.stat = FIELD_DP32(s->regs.intrl0.stat,
+                                             GENET_INTRL_0, TXDMA_MBDONE, 1);
+        } else {
+            tx_intrs = FIELD_EX32(s->regs.intrl1.stat,
+                                  GENET_INTRL_1, TX_INTRS);
+            s->regs.intrl1.stat = FIELD_DP32(s->regs.intrl1.stat,
+                                             GENET_INTRL_1, TX_INTRS,
+                                             tx_intrs | 1 << ring_index);
+        }
+    }
+}
+
+/*
+ * Transmit descriptors a guest queued while a ring was still disabled
+ * (index written before the ring/DMA enable bits were set).
+ */
+static void bcm2838_genet_tdma_kick(BCM2838GenetState *s)
+{
+    unsigned int ring_index;
+
+    for (ring_index = 0; ring_index < ARRAY_SIZE(s->regs.tdma.rings);
+         ring_index++) {
+        if (bcm2838_genet_tdma_ring_active(s, ring_index)) {
+            bcm2838_genet_tdma_process_ring(
+                s, ring_index, s->regs.tdma.rings[ring_index].prod_index);
+        }
+    }
+}
+
 static void bcm2838_genet_tdma(BCM2838GenetState *s, hwaddr offset,
                                uint64_t value)
 {
     hwaddr ring_offset;
-    uint64_t num_descs_tx;
     unsigned int ring_index;
-     uint32_t tx_intrs;
-    uint32_t cons_index;
     uint32_t prod_index = value;
     uint32_t ring_cfg = value;
     uint32_t dma_ctrl = value;
-
-    uint32_t cons_index_fld;
-    uint32_t prod_index_fld =
-        FIELD_EX32(prod_index, GENET_DMA_PROD_INDEX, INDEX);
 
     uint32_t exst_tdma_en =
         FIELD_EX32(s->regs.tdma.ctrl, GENET_DMA_CTRL, EN);
@@ -570,35 +617,7 @@ static void bcm2838_genet_tdma(BCM2838GenetState *s, hwaddr offset,
                 - ring_index * sizeof(BCM2838GenetTdmaRing);
             switch (ring_offset) {
             case BCM2838_GENET_TRING_PROD_INDEX:
-                cons_index = s->regs.tdma.rings[ring_index].cons_index;
-                cons_index_fld = FIELD_EX32(cons_index,
-                                            GENET_DMA_CONS_INDEX, INDEX);
-                if (cons_index_fld != prod_index_fld) {
-                    trace_bcm2838_genet_tx_request(ring_index,
-                                                   prod_index_fld,
-                                                   cons_index_fld);
-                    num_descs_tx = bcm2838_genet_tx(s, ring_index, prod_index,
-                                                    cons_index);
-                    if (num_descs_tx > 0) {
-                        s->regs.tdma.rings[ring_index].cons_index =
-                            FIELD_DP32(s->regs.tdma.rings[ring_index].cons_index,
-                                       GENET_DMA_CONS_INDEX, INDEX,
-                                       cons_index + num_descs_tx);
-
-                        if (ring_index == BCM2838_GENET_DMA_RING_DEFAULT) {
-                            s->regs.intrl0.stat =
-                                FIELD_DP32(s->regs.intrl0.stat, GENET_INTRL_0,
-                                           TXDMA_MBDONE, 1);
-                        } else {
-                            tx_intrs =  FIELD_EX32(s->regs.intrl1.stat,
-                                                   GENET_INTRL_1, TX_INTRS);
-                            s->regs.intrl1.stat =
-                                FIELD_DP32(s->regs.intrl1.stat,
-                                           GENET_INTRL_1, TX_INTRS,
-                                           tx_intrs | 1 << ring_index);
-                        }
-                    }
-                }
+                bcm2838_genet_tdma_process_ring(s, ring_index, prod_index);
                 break;
             default:
                 break;
@@ -725,6 +744,13 @@ static void bcm2838_genet_write(void *opaque, hwaddr offset, uint64_t value,
         }
 
         memcpy((uint8_t *)&s->regs + offset, &value, size);
+
+        if (offset == BCM2838_GENET_TDMA_RING_CFG
+            || offset == BCM2838_GENET_TDMA_CTRL) {
+            /* Rings may have just become active; send anything pending */
+            bcm2838_genet_tdma_kick(s);
+        }
+
         bcm2838_genet_set_irq_default(s);
         bcm2838_genet_set_irq_prio(s);
 
