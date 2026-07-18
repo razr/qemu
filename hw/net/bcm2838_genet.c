@@ -727,6 +727,13 @@ static void bcm2838_genet_write(void *opaque, hwaddr offset, uint64_t value,
         memcpy((uint8_t *)&s->regs + offset, &value, size);
         bcm2838_genet_set_irq_default(s);
         bcm2838_genet_set_irq_prio(s);
+
+        if (offset >= BCM2838_GENET_RDMA_REGS
+            && offset < BCM2838_GENET_RDMA_REGS
+                + sizeof(BCM2838GenetRegsRdma)) {
+            /* Reception may have been (re-)enabled; deliver queued frames */
+            qemu_flush_queued_packets(ncs);
+        }
     } else {
         qemu_log_mask(
             LOG_GUEST_ERROR,
@@ -915,6 +922,17 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
     return len;
 }
 
+static bool bcm2838_genet_can_receive(NetClientState *nc)
+{
+    BCM2838GenetState *s = qemu_get_nic_opaque(nc);
+    bool can_receive = bcm2838_genet_rdma_ring_active(
+        s, BCM2838_GENET_DMA_RING_DEFAULT);
+
+    trace_bcm2838_genet_can_receive(can_receive ? "enabled" : "disabled");
+
+    return can_receive;
+}
+
 static ssize_t bcm2838_genet_receive(NetClientState *nc, const uint8_t *buf,
                                      size_t size)
 {
@@ -940,6 +958,7 @@ static ssize_t bcm2838_genet_receive(NetClientState *nc, const uint8_t *buf,
     bcm2838_genet_set_irq_default(s);
     bcm2838_genet_set_irq_prio(s);
 
+    trace_bcm2838_genet_receive(bytes_received);
     return bytes_received;
 }
 
@@ -997,6 +1016,7 @@ static void bcm2838_genet_set_link(NetClientState *nc)
 static NetClientInfo bcm2838_genet_client_info = {
     .type = NET_CLIENT_DRIVER_NIC,
     .size = sizeof(NICState),
+    .can_receive = bcm2838_genet_can_receive,
     .receive = bcm2838_genet_receive,
     .link_status_changed = bcm2838_genet_set_link,
 };
