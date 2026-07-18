@@ -98,6 +98,11 @@ FIELD(GENET_UMAC_MAC_1, RSVD_16_31, 16, 8)
 /* MDIO address of the only PHY on the bus (BCM54213PE) */
 #define BCM2838_GENET_PHY_ADDR 1
 
+/* RBUF_CTRL/TBUF_CTRL bit 0: pass a 64B status block with each frame */
+#define BCM2838_GENET_BUF_CTRL_64B_EN 1
+/* RBUF_CTRL bit 1: prepend 2 pad bytes so the IP header lands aligned */
+#define BCM2838_GENET_RBUF_ALIGN_2B   2
+
 /* Time the modelled PHY takes to complete auto-negotiation */
 #define BCM2838_GENET_PHY_ANEG_MS 1500
 
@@ -420,14 +425,18 @@ static uint64_t bcm2838_genet_mdio_cmd(BCM2838GenetState *s, uint64_t cmd)
     return cmd;
 }
 
-static void bcm2838_genet_xmit_packet(NetClientState *s, void *packet,
+static void bcm2838_genet_xmit_packet(BCM2838GenetState *s, void *packet,
                                       size_t size)
 {
-    uint8_t *buf = packet + sizeof(BCM2838GenetXmitStatus);
+    uint8_t *buf = packet;
     size_t len = size;
     uint16_t len_type = 0;
 
-    len -= sizeof(BCM2838GenetXmitStatus);
+    /* A TX status block precedes the frame only if the guest enabled it */
+    if ((s->regs.tbuf.ctrl & BCM2838_GENET_BUF_CTRL_64B_EN) != 0) {
+        buf += sizeof(BCM2838GenetXmitStatus);
+        len -= sizeof(BCM2838GenetXmitStatus);
+    }
     net_checksum_calculate(buf, len, CSUM_ALL);
 
     memcpy(&len_type, &buf[12], sizeof(len_type));
@@ -438,7 +447,7 @@ static void bcm2838_genet_xmit_packet(NetClientState *s, void *packet,
         memcpy(&buf[12], &len_type, sizeof(len_type));
     }
 
-    qemu_send_packet(s, buf, len);
+    qemu_send_packet(qemu_get_queue(s->nic), buf, len);
 }
 
 static uint64_t bcm2838_genet_tx(BCM2838GenetState *s, unsigned int ring_index,
@@ -499,8 +508,7 @@ static uint64_t bcm2838_genet_tx(BCM2838GenetState *s, unsigned int ring_index,
         packet_off += buflength;
 
         if (FIELD_EX32(desc_status, GENET_RDMA_LENGTH_STATUS, EOP) != 0) {
-            bcm2838_genet_xmit_packet(qemu_get_queue(s->nic), s->tx_packet,
-                                                     packet_off);
+            bcm2838_genet_xmit_packet(s, s->tx_packet, packet_off);
             packet_off = 0;
         }
 
@@ -881,7 +889,11 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
         hwaddr dma_buf_addr =
             desc->address_lo + ((hwaddr)desc->address_hi << 32);
         MemTxResult mem_tx_result = MEMTX_OK;
-        uint8_t *frame_buf = dma_buf + sizeof(BCM2838GenetXmitStatus) + 2;
+        /* Status block and 2B alignment pad only if the guest enabled them */
+        bool rsb = (s->regs.rbuf.ctrl & BCM2838_GENET_BUF_CTRL_64B_EN) != 0;
+        size_t rsb_len = (rsb ? sizeof(BCM2838GenetXmitStatus) : 0)
+            + ((s->regs.rbuf.ctrl & BCM2838_GENET_RBUF_ALIGN_2B) ? 2 : 0);
+        uint8_t *frame_buf = dma_buf + rsb_len;
         BCM2838GenetXmitStatus *xmit_status = (BCM2838GenetXmitStatus *)dma_buf;
         struct iovec iov;
         bool isip4, isip6;
@@ -912,7 +924,7 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
                                          GENET_RDMA_LENGTH_STATUS,
                                          EOP, !!(len >= size));
 
-        buflength = l + sizeof(BCM2838GenetXmitStatus) + 2;
+        buflength = l + rsb_len;
         if (crc_fwd) {
             buflength += 4;
         }
@@ -930,11 +942,13 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
                                          MULTICAST,
                                          !!is_packet_multicast(frame_buf, l));
 
-        xmit_status->rx_csum = 0;
-        if (isip4) {
-            xmit_status->rx_csum = ip4hdr_info.ip4_hdr.ip_sum;
+        if (rsb) {
+            xmit_status->rx_csum = 0;
+            if (isip4) {
+                xmit_status->rx_csum = ip4hdr_info.ip4_hdr.ip_sum;
+            }
+            xmit_status->length_status = desc->length_status;
         }
-        xmit_status->length_status = desc->length_status;
 
         mem_tx_result = address_space_write(&s->dma_as, dma_buf_addr,
                                             MEMTXATTRS_UNSPECIFIED,
