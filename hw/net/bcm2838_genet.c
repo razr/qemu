@@ -480,7 +480,9 @@ static uint64_t bcm2838_genet_tx(BCM2838GenetState *s, unsigned int ring_index,
         }
 
         num_descs++;
-        cons_index_fld++;
+        /* The consumer index is free-running and wraps at 16 bits */
+        cons_index_fld = FIELD_DP32(0, GENET_DMA_CONS_INDEX, INDEX,
+                                    cons_index_fld + 1);
         s->regs.tdma.descs[desc_index].length_status =
             FIELD_DP32(s->regs.tdma.descs[desc_index].length_status,
                        GENET_RDMA_LENGTH_STATUS, OWN, 1);
