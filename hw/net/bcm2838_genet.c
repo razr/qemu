@@ -798,6 +798,17 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
         return -1;
     }
 
+    if (write_index >= BCM2838_GENET_DMA_DESC_CNT
+        || START_INDEX >= BCM2838_GENET_DMA_DESC_CNT
+        || END_INDEX >= BCM2838_GENET_DMA_DESC_CNT) {
+        qemu_log_mask(
+            LOG_GUEST_ERROR,
+            "%s: invalid RX descriptor ring configuration (indexes %" PRIu64
+            "/%" PRIu64 "/%" PRIu64 " exceed %u)\n", __func__, write_index,
+            START_INDEX, END_INDEX, BCM2838_GENET_DMA_DESC_CNT - 1);
+        return -1;
+    }
+
     desc->length_status = FIELD_DP32(desc->length_status,
                                      GENET_RDMA_LENGTH_STATUS, SOP, 1);
 
