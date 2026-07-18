@@ -23,6 +23,10 @@
 
 static void bcm2838_genet_phy_update_link(BCM2838GenetState *s);
 static void bcm2838_genet_phy_reset(BCM2838GenetState *s);
+static void bcm2838_genet_phy_aneg_start(BCM2838GenetState *s);
+
+/* Time the modelled PHY takes to complete auto-negotiation */
+#define BCM2838_GENET_PHY_ANEG_MS 1500
 
 /* GENET layouts */
 REG32(GENET_SYS_REV_CTRL,              0)
@@ -430,7 +434,7 @@ static uint64_t bcm2838_genet_mdio_cmd(BCM2838GenetState *s, uint64_t cmd)
                 }
                 *phy_reg = phy_reg_data;
                 if (phy_reg_id == BCM2838_GENET_PHY_BMCR && anrestart == 1) {
-                    bcm2838_genet_phy_update_link(s);
+                    bcm2838_genet_phy_aneg_start(s);
                 }
             }
         }
@@ -1114,6 +1118,11 @@ static void bcm2838_genet_phy_update_link(BCM2838GenetState *s)
 
     bool lstatus = FIELD_EX32(s->phy_regs.bmsr, GENET_PHY_BMSR, LSTATUS);
 
+    /* The link stays down until the modelled auto-negotiation completes */
+    if (timer_pending(&s->phy_aneg_timer)) {
+        qemu_link_down = true;
+    }
+
     if (qemu_link_down && lstatus) {
         trace_bcm2838_genet_phy_update_link("down");
 
@@ -1151,6 +1160,26 @@ static void bcm2838_genet_phy_update_link(BCM2838GenetState *s)
     }
 
     bcm2838_genet_set_irq_default(s);
+}
+
+/*
+ * Take the link down and schedule the auto-negotiation to complete a
+ * little later, the way a real PHY behaves after a reset or an AN
+ * restart. Guests watch for this down/up transition to declare the
+ * media active.
+ */
+static void bcm2838_genet_phy_aneg_start(BCM2838GenetState *s)
+{
+    timer_mod(&s->phy_aneg_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + BCM2838_GENET_PHY_ANEG_MS);
+    bcm2838_genet_phy_update_link(s);
+}
+
+static void bcm2838_genet_phy_aneg_done(void *opaque)
+{
+    BCM2838GenetState *s = opaque;
+
+    bcm2838_genet_phy_update_link(s);
 }
 static void bcm2838_genet_set_link(NetClientState *nc)
 {
@@ -1193,6 +1222,9 @@ static void bcm2838_genet_realize(DeviceState *dev, Error **errp)
 
     /* DMA space */
     address_space_init(&s->dma_as, get_system_memory(), "bcm2838_genet_dma");
+
+    timer_init_ms(&s->phy_aneg_timer, QEMU_CLOCK_VIRTUAL,
+                  bcm2838_genet_phy_aneg_done, s);
 }
 
 static void bcm2838_genet_phy_reset(BCM2838GenetState *s)
@@ -1218,7 +1250,7 @@ static void bcm2838_genet_phy_reset(BCM2838GenetState *s)
 
     trace_bcm2838_genet_phy_reset("done");
 
-    bcm2838_genet_phy_update_link(s);
+    bcm2838_genet_phy_aneg_start(s);
 }
 
 static void bcm2838_genet_reset(Object *obj, ResetType type)
@@ -1246,7 +1278,7 @@ static const Property genet_properties[] = {
 
 static const VMStateDescription vmstate_bcm2838_genet = {
     .name = "bcm2838-genet",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs_u32, BCM2838GenetState,
@@ -1261,6 +1293,7 @@ static const VMStateDescription vmstate_bcm2838_genet = {
         VMSTATE_UINT16_2DARRAY(phy_exp_shd_regs.regs, BCM2838GenetState,
                                BCM2838_GENET_PHY_EXP_SHD_BLOCKS_CNT,
                                BCM2838_GENET_PHY_EXP_SHD_REGS_CNT),
+        VMSTATE_TIMER_V(phy_aneg_timer, BCM2838GenetState, 2),
         VMSTATE_END_OF_LIST()
     }
 };
