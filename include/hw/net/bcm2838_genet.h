@@ -11,6 +11,7 @@
 
 #include "net/net.h"
 #include "hw/core/sysbus.h"
+#include "qemu/timer.h"
 
 #define TYPE_BCM2838_GENET "bcm2838-genet"
 OBJECT_DECLARE_SIMPLE_TYPE(BCM2838GenetState, BCM2838_GENET)
@@ -418,6 +419,9 @@ struct BCM2838GenetState {
 
     qemu_irq irq_default;
     qemu_irq irq_prio;
+
+    /* Models the delay between PHY reset/AN restart and link-up */
+    QEMUTimer *phy_aneg_timer;
 
     uint8_t tx_packet[MAX_FRAME_SIZE];
     uint8_t rx_packet[MAX_FRAME_SIZE];
