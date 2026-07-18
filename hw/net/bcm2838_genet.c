@@ -383,7 +383,8 @@ static uint64_t bcm2838_genet_mdio_cmd(BCM2838GenetState *s, uint64_t cmd)
                 if (phy_reg_id == BCM2838_GENET_PHY_BMCR) {
                     /* Initiate auto-negotiation once it has been restarted */
                     if (anrestart == 1) {
-                        FIELD_DP16(phy_reg_data, GENET_PHY_BMCR, ANRESTART, 0);
+                        phy_reg_data = FIELD_DP16(phy_reg_data,
+                                                  GENET_PHY_BMCR, ANRESTART, 0);
                     }
                 }
                 *phy_reg = phy_reg_data;
