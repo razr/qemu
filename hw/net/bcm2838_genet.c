@@ -95,6 +95,9 @@ FIELD(GENET_UMAC_MAC_1, ADDR_5,     0,  8)
 FIELD(GENET_UMAC_MAC_1, ADDR_4,     8,  8)
 FIELD(GENET_UMAC_MAC_1, RSVD_16_31, 16, 8)
 
+/* MDIO address of the only PHY on the bus (BCM54213PE) */
+#define BCM2838_GENET_PHY_ADDR 1
+
 REG32(GENET_UMAC_MDIO_CMD,             0)
 FIELD(GENET_UMAC_MDIO_CMD, REG_DATA,   0, 16)
 FIELD(GENET_UMAC_MDIO_CMD, REG_ID,     16, 5)
@@ -356,6 +359,7 @@ static uint64_t bcm2838_genet_mdio_cmd(BCM2838GenetState *s, uint64_t cmd)
     uint32_t phy_reg_id = FIELD_EX32(cmd, GENET_UMAC_MDIO_CMD, REG_ID);
     uint32_t phy_reg_data = FIELD_EX32(cmd, GENET_UMAC_MDIO_CMD, REG_DATA);
     uint32_t start_busy = FIELD_EX32(cmd, GENET_UMAC_MDIO_CMD, START_BUSY);
+    uint32_t phy_id = FIELD_EX32(cmd, GENET_UMAC_MDIO_CMD, PHY_ID);
     uint32_t rd = FIELD_EX32(cmd, GENET_UMAC_MDIO_CMD, RD);
     uint32_t wr = FIELD_EX32(cmd, GENET_UMAC_MDIO_CMD, WR);
     uint16_t *phy_reg = (uint16_t *)&s->phy_regs + phy_reg_id;
@@ -364,6 +368,15 @@ static uint64_t bcm2838_genet_mdio_cmd(BCM2838GenetState *s, uint64_t cmd)
 
     if (start_busy != 0) {
         cmd = FIELD_DP32(cmd, GENET_UMAC_MDIO_CMD, START_BUSY, 0);
+
+        /* The only PHY on the bus is the BCM54213PE at address 1 */
+        if (phy_id != BCM2838_GENET_PHY_ADDR) {
+            if (rd != 0) {
+                cmd = FIELD_DP32(cmd, GENET_UMAC_MDIO_CMD, RD_FAIL, 1);
+                cmd = FIELD_DP32(cmd, GENET_UMAC_MDIO_CMD, REG_DATA, 0xffff);
+            }
+            return cmd;
+        }
 
         if (rd != 0) {
             if (phy_reg_id == BCM2838_GENET_EXP_DATA) {
