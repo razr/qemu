@@ -8,7 +8,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/registerfields.h"
+#include "hw/core/registerfields.h"
 #include "libqtest-single.h"
 #include "bcm2838-mailbox.h"
 #include "hw/arm/raspberrypi-fw-defs.h"
@@ -58,7 +58,7 @@ FIELD(GET_CLOCK_STATE_CMD, NPRES, 1, 1)
             uint32_t end_tag;                                                  \
         } mailbox_buffer = { 0 };                                              \
                                                                                \
-        QTestState *qts = qtest_init("-machine raspi4b-2g");                   \
+        QTestState *qts = qtest_init("-machine raspi4b");                   \
                                                                                \
         mailbox_buffer.header.size = sizeof(mailbox_buffer);                   \
         mailbox_buffer.header.req_resp_code = MBOX_PROCESS_REQUEST;            \

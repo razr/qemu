@@ -173,19 +173,13 @@ static void bcm2838_rng200_rbg_reset(BCM2838Rng200State *s)
 
 static uint32_t bcm2838_rng200_read_fifo_data(BCM2838Rng200State *s)
 {
-    const uint8_t *buf;
     Fifo8 *fifo = &s->fifo;
     uint32_t to_read = MIN(fifo8_num_used(fifo), 4);
     uint8_t byte_buf[4] = {};
-    uint8_t *p = byte_buf;
     uint32_t ret = 0;
-    uint32_t num = 0;
 
-    while (to_read) {
-        buf = fifo8_pop_buf(fifo, to_read, &num);
-        memcpy(p, buf, num);
-        p += num;
-        to_read -= num;
+    if (to_read > 0) {
+        fifo8_pop_buf(fifo, byte_buf, to_read);
     }
     ret = ldl_le_p(byte_buf);
 

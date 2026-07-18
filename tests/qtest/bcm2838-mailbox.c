@@ -8,7 +8,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/registerfields.h"
+#include "hw/core/registerfields.h"
 #include "libqtest-single.h"
 #include "bcm2838-mailbox.h"
 

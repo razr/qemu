@@ -13,10 +13,10 @@
 #include <stdbool.h>
 #include "qom/object.h"
 #include "qemu/fifo8.h"
-#include "sysemu/rng.h"
+#include "system/rng.h"
 #include "hw/core/sysbus.h"
-#include "hw/ptimer.h"
-#include "hw/qdev-clock.h"
+#include "hw/core/ptimer.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/irq.h"
 
 #define TYPE_BCM2838_RNG200 "bcm2838-rng200"
