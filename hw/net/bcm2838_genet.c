@@ -585,6 +585,10 @@ static void bcm2838_genet_tdma_process_ring(BCM2838GenetState *s,
         if (ring_index == BCM2838_GENET_DMA_RING_DEFAULT) {
             s->regs.intrl0.stat = FIELD_DP32(s->regs.intrl0.stat,
                                              GENET_INTRL_0, TXDMA_MBDONE, 1);
+            s->regs.intrl0.stat = FIELD_DP32(s->regs.intrl0.stat,
+                                             GENET_INTRL_0, TXDMA_PDONE, 1);
+            s->regs.intrl0.stat = FIELD_DP32(s->regs.intrl0.stat,
+                                             GENET_INTRL_0, TXDMA_BDONE, 1);
         } else {
             tx_intrs = FIELD_EX32(s->regs.intrl1.stat,
                                   GENET_INTRL_1, TX_INTRS);
@@ -961,6 +965,10 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
     if (ring_idx == BCM2838_GENET_DMA_RING_DEFAULT) {
         s->regs.intrl0.stat = FIELD_DP32(s->regs.intrl0.stat,
                                          GENET_INTRL_0, RXDMA_MBDONE, 1);
+        s->regs.intrl0.stat = FIELD_DP32(s->regs.intrl0.stat,
+                                         GENET_INTRL_0, RXDMA_PDONE, 1);
+        s->regs.intrl0.stat = FIELD_DP32(s->regs.intrl0.stat,
+                                         GENET_INTRL_0, RXDMA_BDONE, 1);
     } else {
         uint32_t rx_intrs =
             FIELD_EX32(s->regs.intrl1.stat, GENET_INTRL_1, RX_INTRS);
