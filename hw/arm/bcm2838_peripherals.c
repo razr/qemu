@@ -58,7 +58,7 @@ static void bcm2838_peripherals_init(Object *obj)
     object_initialize_child(obj, "gpio", &s->gpio, TYPE_BCM2838_GPIO);
 
     object_property_add_const_link(OBJECT(&s->gpio), "sdbus-sdhci",
-                                   OBJECT(&s_base->sdhci.sdbus));
+                                   OBJECT(&s->emmc2.sdbus));
     object_property_add_const_link(OBJECT(&s->gpio), "sdbus-sdhost",
                                    OBJECT(&s_base->sdhost.sdbus));
 
