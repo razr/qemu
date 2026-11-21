@@ -36,6 +36,16 @@ OBJECT_DECLARE_TYPE(BCM2838PcieRootState, BCM2838PcieRootClass,
 #define BCM2838_PCIE_EXT_CFG_DATA   0x8000
 #define BCM2838_PCIE_EXT_CFG_INDEX  0x9000
 
+/*
+ * Outbound window: CPU accesses to the window land at PCI address
+ * MISC_CPU_2_PCIE_MEM_WIN0_HI:LO. The guest programs that address (Linux
+ * pcie-brcmstb from the dtb "ranges"); until it does, PCI 0xc0000000.
+ */
+#define BCM2838_PCIE_MEM_WIN0_LO    0x400c
+#define BCM2838_PCIE_MEM_WIN0_HI    0x4010
+#define BCM2838_PCIE_MEM_WIN0_DEFAULT 0xc0000000
+#define BCM2838_PCIE_MEM_WIN0_SIZE  0x40000000
+
 struct BCM2838PcieRootState {
     /*< private >*/
     PCIESlot parent_obj;
@@ -66,6 +76,8 @@ struct BCM2838PcieHostState {
     MemoryRegion io_mmio;
     MemoryRegion io_ioport_window;
     MemoryRegion io_mmio_window;
+    /* CPU view of the outbound window: io_mmio_window from MEM_WIN0 */
+    MemoryRegion mem_win0;
 
     qemu_irq irq[BCM2838_PCIE_NUM_IRQS];
 };

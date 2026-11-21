@@ -92,6 +92,23 @@ static uint64_t bcm2838_pcie_host_read(void *opaque, hwaddr offset,
     return value;
 }
 
+/*
+ * Point the outbound window at the PCI address the guest programmed in
+ * MISC_CPU_2_PCIE_MEM_WIN0_HI:LO (0 = not programmed: the default).
+ */
+static void bcm2838_pcie_mem_win0_update(BCM2838PcieHostState *s)
+{
+    const uint8_t *regs = s->root_port.regs - PCIE_CONFIG_SPACE_SIZE;
+    uint64_t pci_addr = (uint32_t)ldl_le_p(regs + BCM2838_PCIE_MEM_WIN0_LO)
+        | ((uint64_t)(uint32_t)ldl_le_p(regs + BCM2838_PCIE_MEM_WIN0_HI) << 32);
+
+    if (pci_addr == 0 || pci_addr == UINT64_MAX) {
+        /* not programmed (or reset to all-ones) */
+        pci_addr = BCM2838_PCIE_MEM_WIN0_DEFAULT;
+    }
+    memory_region_set_alias_offset(&s->mem_win0, pci_addr);
+}
+
 static void bcm2838_pcie_host_write(void *opaque, hwaddr offset,
                                     uint64_t value, unsigned size) {
     BCM2838PcieHostState *s = opaque;
@@ -120,6 +137,9 @@ static void bcm2838_pcie_host_write(void *opaque, hwaddr offset,
             break;
         default:
             stn_le_p(root_regs + offset - PCIE_CONFIG_SPACE_SIZE, size, value);
+        }
+        if (ranges_overlap(offset, size, BCM2838_PCIE_MEM_WIN0_LO, 8)) {
+            bcm2838_pcie_mem_win0_update(s);
         }
     } else {
         qemu_log_mask(
@@ -184,6 +204,13 @@ static void bcm2838_pcie_host_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(sbd, &s->io_mmio_window);
     sysbus_init_mmio(sbd, &s->io_ioport_window);
 
+    /* MMIO region 3: the outbound window, as the CPU sees it */
+    memory_region_init_alias(&s->mem_win0, OBJECT(s), "bcm2838_pcie_mem_win0",
+                             &s->io_mmio_window,
+                             BCM2838_PCIE_MEM_WIN0_DEFAULT,
+                             BCM2838_PCIE_MEM_WIN0_SIZE);
+    sysbus_init_mmio(sbd, &s->mem_win0);
+
     for (i = 0; i < BCM2838_PCIE_NUM_IRQS; i++) {
         sysbus_init_irq(sbd, &s->irq[i]);
     }
@@ -245,6 +272,7 @@ static void bcm2838_pcie_root_port_reset_hold(Object *obj, ResetType type)
     }
 
     memset(s->regs, 0xFF, sizeof(s->regs));
+    bcm2838_pcie_mem_win0_update(BCM2838_PCIE_HOST(OBJECT(obj)->parent));
 }
 
 static void bcm2838_pcie_root_init(Object *obj)
@@ -253,12 +281,18 @@ static void bcm2838_pcie_root_init(Object *obj)
     br->bus_name = "pcie.1";
 }
 
+static int bcm2838_pcie_root_post_load(void *opaque, int version_id)
+{
+    bcm2838_pcie_mem_win0_update(BCM2838_PCIE_HOST(OBJECT(opaque)->parent));
+    return pcie_cap_slot_post_load(opaque, version_id);
+}
+
 static const VMStateDescription vmstate_bcm2838_pcie_root = {
     .name = "bcm2838-pcie-root",
     .priority = MIG_PRI_PCI_BUS,
     .version_id = 1,
     .minimum_version_id = 1,
-    .post_load = pcie_cap_slot_post_load,
+    .post_load = bcm2838_pcie_root_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE(parent_obj.parent_obj.parent_obj, PCIESlot),
         VMSTATE_STRUCT(parent_obj.parent_obj.parent_obj.exp.aer_log,
