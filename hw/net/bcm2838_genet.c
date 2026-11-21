@@ -566,6 +566,45 @@ static bool bcm2838_genet_rdma_ring_active(BCM2838GenetState *s,
     return active;
 }
 
+/*
+ * Free descriptors in an RX ring: the ring size (start_addr..end_addr, in
+ * descriptors) minus the ones filled but not yet consumed by the guest
+ * (PROD_INDEX - CONS_INDEX, 16-bit counters). Like the hardware, the model
+ * must not fill a descriptor the guest has not released yet.
+ */
+static unsigned int bcm2838_genet_rdma_ring_free(BCM2838GenetState *s,
+                                                 uint32_t ring_idx)
+{
+    const size_t DESC_WORD_SIZE =
+        sizeof(BCM2838GenetRdmaDesc) / sizeof(uint32_t);
+    BCM2838GenetRdmaRing *ring = &s->regs.rdma.rings[ring_idx];
+    hwaddr start = (ring->start_addr + ((hwaddr)ring->start_addr_hi << 32))
+        / DESC_WORD_SIZE;
+    hwaddr end = (ring->end_addr + ((hwaddr)ring->end_addr_hi << 32))
+        / DESC_WORD_SIZE;
+    uint32_t prod = FIELD_EX32(ring->prod_index, GENET_DMA_PROD_INDEX, INDEX);
+    uint32_t cons = FIELD_EX32(ring->cons_index, GENET_DMA_CONS_INDEX, INDEX);
+    uint32_t used = (prod - cons) & 0xffff;
+    uint32_t ring_size;
+
+    if (end < start || end >= BCM2838_GENET_DMA_DESC_CNT) {
+        return 0;
+    }
+    ring_size = end - start + 1;
+
+    return used >= ring_size ? 0 : ring_size - used;
+}
+
+/* Descriptors bcm2838_genet_rdma() uses for a frame of 'size' bytes */
+static unsigned int bcm2838_genet_rdma_descs_needed(BCM2838GenetState *s,
+                                                    uint32_t ring_idx,
+                                                    size_t size)
+{
+    uint32_t buf_size = s->regs.rdma.rings[ring_idx].ring_buf_size;
+
+    return buf_size ? DIV_ROUND_UP(size, buf_size) : 1;
+}
+
 static void bcm2838_genet_tdma_process_ring(BCM2838GenetState *s,
                                             unsigned int ring_index,
                                             uint32_t prod_index)
@@ -879,6 +918,12 @@ static ssize_t bcm2838_genet_rdma(BCM2838GenetState *s, uint32_t ring_idx,
         return -1;
     }
 
+    /* Ring full: leave the frame queued until the guest consumes */
+    if (bcm2838_genet_rdma_ring_free(s, ring_idx)
+        < bcm2838_genet_rdma_descs_needed(s, ring_idx, size)) {
+        return 0;
+    }
+
     desc->length_status = FIELD_DP32(desc->length_status,
                                      GENET_RDMA_LENGTH_STATUS, SOP, 1);
 
@@ -999,7 +1044,8 @@ static bool bcm2838_genet_can_receive(NetClientState *nc)
 {
     BCM2838GenetState *s = qemu_get_nic_opaque(nc);
     bool can_receive = bcm2838_genet_rdma_ring_active(
-        s, BCM2838_GENET_DMA_RING_DEFAULT);
+            s, BCM2838_GENET_DMA_RING_DEFAULT)
+        && bcm2838_genet_rdma_ring_free(s, BCM2838_GENET_DMA_RING_DEFAULT) > 0;
 
     trace_bcm2838_genet_can_receive(can_receive ? "enabled" : "disabled");
 
